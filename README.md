@@ -4,6 +4,33 @@ A small end-to-end experiment: **instrument a sample web app with semantic user 
 
 It is inspired by the idea behind Real User Monitoring (RUM). It does not use any vendor's monitoring product.
 
+## How it fits together
+
+```mermaid
+flowchart TB
+    subgraph SRC["1. Where events come from"]
+        A["Sample shop<br/>track('add_to_cart')"] -->|semantic events| B["Collector<br/>Flask /events"]
+        S["Simulator<br/>synthetic sessions"]
+    end
+    B --> C[("observed events")]
+    S --> C
+    S --> T[("true events<br/>ground truth")]
+    subgraph ANA["2. Analysis"]
+        D["Metrics<br/>completion, funnel, time on task,<br/>deviations, feature usage"]
+        E["Gap analysis<br/>monitored vs. actual"]
+    end
+    C --> D
+    C --> E
+    T --> E
+    D --> F["3. Claude insights<br/>aggregated numbers only"]
+    E --> F
+    D --> G["4. Streamlit dashboard"]
+    E --> G
+    F --> G
+```
+
+The simulator writes both the ground truth and the (lossy) observed events. The live sample app writes only observed events.
+
 ## What it does
 
 | Step | Where | What happens |
@@ -14,6 +41,27 @@ It is inspired by the idea behind Real User Monitoring (RUM). It does not use an
 | 4. Compare | `analytics/metrics.py: gap_analysis` | Compares monitored data with ground truth: invisible sessions, capture rate per action, bias in completion rate. |
 | 5. Explain | `insights/claude_insights.py` | Sends only **aggregated** metrics to the Claude API and asks for insights and recommendations. Falls back to a rule-based summary without an API key. |
 | 6. Present | `dashboard/app.py` | Streamlit dashboard with all of the above. |
+
+### The task being measured
+
+The main task is a checkout. A session counts as *completed* when it reaches `submit_order`. Detours (dotted) are legitimate but count as deviations from the expected path.
+
+```mermaid
+flowchart TD
+    A[view_product_list] --> B[view_product]
+    B --> C[add_to_cart]
+    C --> D[view_cart]
+    D --> E[start_checkout]
+    E --> F[enter_shipping]
+    F --> G[enter_payment]
+    G --> H(["submit_order<br/>TASK COMPLETED"])
+    D -. "detour" .-> R[remove_from_cart]
+    R -.-> D
+    F -. "detour" .-> BK[back_to_cart]
+    BK -.-> E
+    N["At every step a user can leave.<br/>Sessions that never reach submit_order<br/>count as not completed."]
+    style N fill:none,stroke-dasharray: 4 4
+```
 
 ## Run it
 
@@ -42,7 +90,41 @@ The numbers in the dashboard come from `data/simulate.py`, which generates synth
 - 3% of events lost to network or beacon failures,
 - 7% of the final `submit_order` events lost on page unload.
 
+```mermaid
+flowchart LR
+    U["What users actually did<br/>(ground truth)"] --> L1{"Tracker blocked?<br/>8% of sessions"}
+    L1 -->|yes| LOST1["whole session invisible"]
+    L1 -->|no| L2{"Action instrumented?<br/>promo code is not"}
+    L2 -->|no| LOST2["action never observed"]
+    L2 -->|yes| L3{"Event delivered?<br/>3% lost, submit_order 7%"}
+    L3 -->|no| LOST3["event missing"]
+    L3 -->|yes| OBS["What monitoring observed"]
+```
+
 Because I chose these loss rates, the gap analysis shows that the pipeline *detects* such gaps. It does not show how large they are in any real system. With real data you would replace the simulated ground truth with something independent, such as server-side order records.
+
+## How the AI insights are produced
+
+```mermaid
+sequenceDiagram
+    participant D as Dashboard
+    participant M as metrics.py
+    participant I as claude_insights.py
+    participant C as Claude API
+    D->>M: events (observed)
+    M-->>D: aggregated metrics
+    D->>I: metrics + gap summary
+    Note over I: only aggregates, no raw events or session ids
+    alt API key set
+        I->>C: system prompt + metrics JSON
+        C-->>I: insights and 3 recommendations
+    else no key or call fails
+        I-->>I: rule-based summary
+    end
+    I-->>D: text + source label
+```
+
+The model never sees raw events or session ids, and its prompt tells it to use only the numbers provided and to flag unreliable data.
 
 ## Example findings (simulated, 2000 sessions, seed 42)
 
