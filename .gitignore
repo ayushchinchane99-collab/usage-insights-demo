@@ -1,0 +1,4 @@
+__pycache__/
+.pytest_cache/
+data/live_events.jsonl
+.env

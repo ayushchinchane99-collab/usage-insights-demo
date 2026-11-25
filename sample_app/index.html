@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Demo Shop</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1d2433; --muted:#667085; --accent:#0a6ed1; --line:#e4e7ec; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 system-ui, sans-serif; background:var(--bg); color:var(--ink); }
+  header { background:var(--card); border-bottom:1px solid var(--line); padding:12px 20px; display:flex; gap:16px; align-items:center; }
+  header h1 { font-size:18px; margin:0; flex:1; }
+  main { max-width:880px; margin:20px auto; padding:0 16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:12px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:12px; }
+  button { font:inherit; padding:8px 14px; border-radius:8px; border:1px solid var(--line); background:var(--card); cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  input, select { font:inherit; padding:8px; border:1px solid var(--line); border-radius:8px; width:100%; margin:4px 0 10px; }
+  .row { display:flex; gap:8px; align-items:center; }
+  .muted { color:var(--muted); font-size:13px; }
+  .bar { display:flex; gap:8px; margin-bottom:12px; }
+  .bar input, .bar select { margin:0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Demo Shop</h1>
+  <button id="nav-list">Catalogue</button>
+  <button id="nav-cart">Cart (<span id="cart-count">0</span>)</button>
+</header>
+<main id="view"></main>
+
+<script src="/tracker.js"></script>
+<script>
+var PRODUCTS = [
+  { id:1, name:"Desk Lamp",       price:29,  cat:"home" },
+  { id:2, name:"Notebook Set",    price:12,  cat:"office" },
+  { id:3, name:"Wireless Mouse",  price:24,  cat:"office" },
+  { id:4, name:"Water Bottle",    price:15,  cat:"home" },
+  { id:5, name:"Backpack",        price:59,  cat:"outdoor" },
+  { id:6, name:"Headlamp",        price:35,  cat:"outdoor" }
+];
+var cart = [], wishlist = [];
+var view = document.getElementById("view");
+
+function money(n){ return "€" + n.toFixed(2); }
+function updateCount(){ document.getElementById("cart-count").textContent = cart.length; }
+
+function showList(query, cat){
+  track("view_product_list");
+  renderList(query || "", cat || "");
+}
+function renderList(query, cat){
+  var items = PRODUCTS.filter(function(p){
+    return (!query || p.name.toLowerCase().indexOf(query.toLowerCase()) >= 0) && (!cat || p.cat === cat);
+  });
+  view.innerHTML =
+    '<div class="bar">' +
+      '<input id="q" placeholder="Search products" value="' + query + '">' +
+      '<button id="do-search">Search</button>' +
+      '<select id="cat"><option value="">All</option><option>home</option><option>office</option><option>outdoor</option></select>' +
+    '</div><div class="grid">' +
+    items.map(function(p){
+      return '<div class="card"><b>' + p.name + '</b><div class="muted">' + p.cat + '</div><p>' + money(p.price) +
+             '</p><button data-open="' + p.id + '">View</button></div>';
+    }).join("") + '</div>';
+  document.getElementById("cat").value = cat;
+  document.getElementById("do-search").onclick = function(){
+    var q = document.getElementById("q").value;
+    track("search_products", { query_length: q.length });
+    renderList(q, document.getElementById("cat").value);
+  };
+  document.getElementById("cat").onchange = function(e){
+    track("apply_filter", { category: e.target.value });
+    renderList(document.getElementById("q").value, e.target.value);
+  };
+  view.querySelectorAll("[data-open]").forEach(function(b){
+    b.onclick = function(){ showProduct(+b.dataset.open); };
+  });
+}
+
+function showProduct(id){
+  var p = PRODUCTS.filter(function(x){ return x.id === id; })[0];
+  track("view_product", { product_id: id });
+  view.innerHTML = '<div class="card"><h2>' + p.name + '</h2><p>' + money(p.price) + '</p>' +
+    '<div class="row"><button class="primary" id="add">Add to cart</button>' +
+    '<button id="wish">Save to wishlist</button><button id="back">Back</button></div></div>';
+  document.getElementById("add").onclick = function(){
+    cart.push(p); updateCount(); track("add_to_cart", { product_id: id });
+  };
+  document.getElementById("wish").onclick = function(){
+    wishlist.push(p); track("add_to_wishlist", { product_id: id });
+  };
+  document.getElementById("back").onclick = function(){ showList(); };
+}
+
+function showCart(quiet){
+  // quiet = re-render after a cart change or "back" navigation: no extra view_cart event
+  if (quiet !== true) track("view_cart", { items: cart.length });
+  var total = cart.reduce(function(s,p){ return s + p.price; }, 0);
+  view.innerHTML = '<div class="card"><h2>Cart</h2>' +
+    (cart.length ? cart.map(function(p,i){
+      return '<div class="row"><span style="flex:1">' + p.name + ' – ' + money(p.price) +
+             '</span><button data-rm="' + i + '">Remove</button></div>';
+    }).join("") : '<p class="muted">Your cart is empty.</p>') +
+    '<p><b>Total: ' + money(total) + '</b></p>' +
+    '<div class="row"><input id="promo" placeholder="Promo code"><button id="promo-btn">Apply</button></div>' +
+    '<button class="primary" id="checkout"' + (cart.length ? "" : " disabled") + '>Checkout</button></div>';
+  view.querySelectorAll("[data-rm]").forEach(function(b){
+    b.onclick = function(){ cart.splice(+b.dataset.rm, 1); updateCount(); track("remove_from_cart"); showCart(true); };
+  });
+  // NOTE: no track() call here on purpose: promo codes are an uninstrumented feature.
+  document.getElementById("promo-btn").onclick = function(){ /* apply promo */ };
+  document.getElementById("checkout").onclick = showShipping;
+}
+function showShipping(){
+  track("start_checkout");
+  view.innerHTML = '<div class="card"><h2>Shipping</h2>' +
+    '<label>Name<input id="n"></label><label>Address<input id="a"></label>' +
+    '<div class="row"><button id="back-cart">Back to cart</button>' +
+    '<button class="primary" id="next">Continue</button></div></div>';
+  document.getElementById("back-cart").onclick = function(){ track("back_to_cart"); showCart(true); };
+  document.getElementById("next").onclick = function(){ track("enter_shipping"); showPayment(); };
+}
+
+function showPayment(){
+  view.innerHTML = '<div class="card"><h2>Payment</h2>' +
+    '<label>Card holder<input id="h"></label><label>Card number (demo only, do not enter real data)<input id="c"></label>' +
+    '<button class="primary" id="pay">Place order</button></div>';
+  document.getElementById("pay").onclick = function(){
+    track("enter_payment"); track("submit_order", { items: cart.length });
+    view.innerHTML = '<div class="card"><h2>Thank you!</h2><p>Your demo order was placed.</p></div>';
+    cart = []; updateCount();
+  };
+}
+
+document.getElementById("nav-list").onclick = function(){ showList(); };
+document.getElementById("nav-cart").onclick = showCart;
+showList();
+</script>
+</body>
+</html>
